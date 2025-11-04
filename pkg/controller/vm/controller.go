@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 
 	"github.com/sirupsen/logrus"
@@ -18,7 +19,8 @@ import (
 const (
 	controllerName = "vm-dhcp-vm-controller"
 
-	vmLabelKey = "harvesterhci.io/vmName"
+	vmLabelKey            = "harvesterhci.io/vmName"
+	macAddressAnnotation  = "harvesterhci.io/mac-address"
 )
 
 type Handler struct {
@@ -52,6 +54,22 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 	}
 
 	logrus.Debugf("(vm.OnChange) vm configuration %s/%s has been changed", vm.Namespace, vm.Name)
+
+	// Apply MAC addresses from annotation to VM spec if missing
+	vmCopy, updated, err := h.applyMACAddressAnnotation(vm)
+	if err != nil {
+		logrus.Errorf("(vm.OnChange) failed to apply MAC address annotation for vm %s: %v", key, err)
+		return vm, err
+	}
+
+	// If we updated the VM spec, persist the changes
+	if updated {
+		logrus.Infof("(vm.OnChange) applied MAC addresses from annotation to vm %s", key)
+		vm, err = h.vmClient.Update(vmCopy)
+		if err != nil {
+			return vm, err
+		}
+	}
 
 	ncm := make(map[string]networkv1.NetworkConfig, 1)
 
@@ -140,4 +158,48 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 	}
 
 	return vm, nil
+}
+
+// applyMACAddressAnnotation applies MAC addresses from the annotation to VM interfaces that don't have MAC addresses set.
+// It returns a deep copy of the VM with updated MAC addresses, a boolean indicating if any updates were made, and an error if any.
+func (h *Handler) applyMACAddressAnnotation(vm *kubevirtv1.VirtualMachine) (*kubevirtv1.VirtualMachine, bool, error) {
+	// Check if the annotation exists
+	macAnnotation, exists := vm.Annotations[macAddressAnnotation]
+	if !exists || macAnnotation == "" {
+		return vm, false, nil
+	}
+
+	// Parse the annotation JSON: {"interface-name": "mac-address", ...}
+	var macAddresses map[string]string
+	if err := json.Unmarshal([]byte(macAnnotation), &macAddresses); err != nil {
+		logrus.Warnf("(vm.applyMACAddressAnnotation) failed to parse MAC address annotation for vm %s/%s: %v", vm.Namespace, vm.Name, err)
+		return vm, false, nil
+	}
+
+	if len(macAddresses) == 0 {
+		return vm, false, nil
+	}
+
+	// Create a deep copy to avoid modifying the original
+	vmCopy := vm.DeepCopy()
+	updated := false
+
+	// Apply MAC addresses to interfaces that don't have them set
+	for i := range vmCopy.Spec.Template.Spec.Domain.Devices.Interfaces {
+		nic := &vmCopy.Spec.Template.Spec.Domain.Devices.Interfaces[i]
+
+		// Skip if MAC address is already set
+		if nic.MacAddress != "" {
+			continue
+		}
+
+		// Check if we have a MAC address for this interface in the annotation
+		if macAddr, ok := macAddresses[nic.Name]; ok && macAddr != "" {
+			logrus.Infof("(vm.applyMACAddressAnnotation) applying MAC address %s to interface %s on vm %s/%s", macAddr, nic.Name, vm.Namespace, vm.Name)
+			nic.MacAddress = macAddr
+			updated = true
+		}
+	}
+
+	return vmCopy, updated, nil
 }

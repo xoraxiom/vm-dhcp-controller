@@ -232,4 +232,44 @@ func TestHandler_OnChange(t *testing.T) {
 		// Spec should be synced with the VM
 		assert.Equal(t, expectedVmNetCfg, vmNetCfg)
 	})
+
+	t.Run("vm with mac annotation but no mac in spec", func(t *testing.T) {
+		givenVM := newTestVMBuilder().
+			WithInterface("", testNICName).
+			WithNetwork(testNICName, testNetworkName).
+			WithAnnotation(macAddressAnnotation, `{"nic1":"22:33:44:55:66:77"}`).Build()
+
+		expectedVmNetCfg := newTestVmNetCfgBuilder().
+			Label(vmLabelKey, testVMName).
+			OwnerRef(metav1.OwnerReference{
+				Name: testVMName,
+			}).
+			WithVMName(testVMName).
+			WithNetworkConfig("", testMACAddress2, testNetworkName).Build()
+
+		clientset := fake.NewSimpleClientset()
+		err := clientset.Tracker().Add(givenVM)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		handler := Handler{
+			vmClient:       fakeclient.VirtualMachineClient(clientset.KubevirtV1().VirtualMachines),
+			vmnetcfgCache:  fakeclient.VirtualMachineNetworkConfigCache(clientset.NetworkV1alpha1().VirtualMachineNetworkConfigs),
+			vmnetcfgClient: fakeclient.VirtualMachineNetworkConfigClient(clientset.NetworkV1alpha1().VirtualMachineNetworkConfigs),
+		}
+
+		_, err = handler.OnChange(testKey, givenVM)
+		assert.Nil(t, err)
+
+		// Verify VM was updated with MAC address from annotation
+		updatedVM, err := handler.vmClient.Get(testVMNamespace, testVMName, metav1.GetOptions{})
+		assert.Nil(t, err)
+		assert.Equal(t, testMACAddress2, updatedVM.Spec.Template.Spec.Domain.Devices.Interfaces[0].MacAddress)
+
+		// Verify vmnetcfg was created with MAC address
+		vmNetCfg, err := handler.vmnetcfgClient.Get(testVmNetCfgNamespace, testVmNetCfgName, metav1.GetOptions{})
+		assert.Nil(t, err)
+		assert.Equal(t, expectedVmNetCfg, vmNetCfg)
+	})
 }

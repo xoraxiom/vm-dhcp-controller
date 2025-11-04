@@ -54,6 +54,15 @@ func newVMBuilder(namespace, name string) *vmBuilder {
 	}
 }
 
+// WithAnnotation adds an annotation to the VM metadata.
+func (b *vmBuilder) WithAnnotation(key, value string) *vmBuilder {
+	if b.vm.Annotations == nil {
+		b.vm.Annotations = make(map[string]string)
+	}
+	b.vm.Annotations[key] = value
+	return b
+}
+
 // WithInterface adds a network interface to the VM with the specified MAC address, NIC name, and network name.
 func (b *vmBuilder) WithInterface(macAddress, nicName string) *vmBuilder {
 	if b.vm.Spec.Template == nil {
