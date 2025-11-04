@@ -2,6 +2,8 @@
 
 FROM registry.suse.com/bci/bci-base:15.7
 
+LABEL org.opencontainers.image.source=https://github.com/xoraxiom/vm-dhcp-controller
+
 RUN zypper -n rm container-suseconnect && \
     zypper -n in curl dhcp-tools jq
 

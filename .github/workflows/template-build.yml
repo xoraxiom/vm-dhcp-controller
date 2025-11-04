@@ -1,3 +1,5 @@
+name: Build and Push Container Images
+
 on:
   workflow_call:
     inputs:
