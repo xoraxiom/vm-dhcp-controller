@@ -1,0 +1,13 @@
+apiVersion: v1
+entries:
+  harvester-vm-dhcp-controller:
+  - apiVersion: v2
+    appVersion: "0.1.1"
+    created: "2025-11-06T20:53:00Z"
+    description: A Helm chart for Kubernetes
+    name: harvester-vm-dhcp-controller
+    type: application
+    urls:
+    - https://github.com/xoraxiom/vm-dhcp-controller/releases/download/v0.1.1/harvester-vm-dhcp-controller-0.1.1.tgz
+    version: 0.1.1
+generated: "2025-11-06T20:53:00Z"
