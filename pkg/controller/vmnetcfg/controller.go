@@ -124,7 +124,7 @@ func (h *Handler) Allocate(vmNetCfg *networkv1.VirtualMachineNetworkConfig, stat
 
 	var ncStatuses []networkv1.NetworkConfigStatus
 	for _, nc := range vmNetCfg.Spec.NetworkConfigs {
-		ipPool, err := h.getIPPoolFromNetworkConfig(nc)
+		ipPool, err := h.getIPPoolFromNetworkConfig(vmNetCfg.Namespace, nc)
 		if err != nil {
 			return status, err
 		}
@@ -312,7 +312,7 @@ func (h *Handler) cleanup(vmNetCfg *networkv1.VirtualMachineNetworkConfig, clean
 			}
 
 			if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-				ipPool, err := h.getIPPoolFromNetworkConfigStatus(ncStatus)
+				ipPool, err := h.getIPPoolFromNetworkConfigStatus(vmNetCfg.Namespace, ncStatus)
 				if err != nil {
 					return err
 				}
@@ -347,16 +347,16 @@ func findIPAddressFromNetworkConfigStatusByMACAddress(ncStatuses []networkv1.Net
 	return net.IPv4zero.String(), fmt.Errorf("could not find allocated ip for mac %s", macAddress)
 }
 
-func (h *Handler) getIPPoolFromNetworkName(networkName string) (*networkv1.IPPool, error) {
-	// Use empty string as fallback namespace to preserve existing behavior
-	// where unqualified network names pass empty namespace to cache Get()
-	return util.GetIPPoolFromNetworkName(h.nadCache, h.ippoolCache, networkName, "")
+func (h *Handler) getIPPoolFromNetworkName(vmNetCfgNamespace string, networkName string) (*networkv1.IPPool, error) {
+	// Use VirtualMachineNetworkConfig's namespace as fallback for unqualified network names
+	// This follows Kubernetes/Multus convention (same as VM controller and webhook validator)
+	return util.GetIPPoolFromNetworkName(h.nadCache, h.ippoolCache, networkName, vmNetCfgNamespace)
 }
 
-func (h *Handler) getIPPoolFromNetworkConfig(nc networkv1.NetworkConfig) (*networkv1.IPPool, error) {
-	return h.getIPPoolFromNetworkName(nc.NetworkName)
+func (h *Handler) getIPPoolFromNetworkConfig(vmNetCfgNamespace string, nc networkv1.NetworkConfig) (*networkv1.IPPool, error) {
+	return h.getIPPoolFromNetworkName(vmNetCfgNamespace, nc.NetworkName)
 }
 
-func (h *Handler) getIPPoolFromNetworkConfigStatus(ncStatus networkv1.NetworkConfigStatus) (*networkv1.IPPool, error) {
-	return h.getIPPoolFromNetworkName(ncStatus.NetworkName)
+func (h *Handler) getIPPoolFromNetworkConfigStatus(vmNetCfgNamespace string, ncStatus networkv1.NetworkConfigStatus) (*networkv1.IPPool, error) {
+	return h.getIPPoolFromNetworkName(vmNetCfgNamespace, ncStatus.NetworkName)
 }
