@@ -23,7 +23,7 @@ rules:
   verbs: [ "watch", "list" ]
 - apiGroups: [ "kubevirt.io" ]
   resources: [ "virtualmachines" ]
-  verbs: [ "get", "watch", "list" ]
+  verbs: [ "get", "watch", "list", "update" ]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
