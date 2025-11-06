@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 
+	"github.com/rancher/wrangler/v3/pkg/kv"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -12,8 +13,10 @@ import (
 
 	networkv1 "github.com/harvester/vm-dhcp-controller/pkg/apis/network.harvesterhci.io/v1alpha1"
 	"github.com/harvester/vm-dhcp-controller/pkg/config"
+	ctlcniv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/k8s.cni.cncf.io/v1"
 	ctlkubevirtv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/kubevirt.io/v1"
 	ctlnetworkv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/network.harvesterhci.io/v1alpha1"
+	"github.com/harvester/vm-dhcp-controller/pkg/util"
 )
 
 const (
@@ -29,11 +32,15 @@ type Handler struct {
 	vmCache        ctlkubevirtv1.VirtualMachineCache
 	vmnetcfgClient ctlnetworkv1.VirtualMachineNetworkConfigClient
 	vmnetcfgCache  ctlnetworkv1.VirtualMachineNetworkConfigCache
+	ippoolCache    ctlnetworkv1.IPPoolCache
+	nadCache       ctlcniv1.NetworkAttachmentDefinitionCache
 }
 
 func Register(ctx context.Context, management *config.Management) error {
 	vms := management.KubeVirtFactory.Kubevirt().V1().VirtualMachine()
 	vmnetcfgs := management.HarvesterNetworkFactory.Network().V1alpha1().VirtualMachineNetworkConfig()
+	ippools := management.HarvesterNetworkFactory.Network().V1alpha1().IPPool()
+	nads := management.CniFactory.K8s().V1().NetworkAttachmentDefinition()
 
 	handler := &Handler{
 		vmController:   vms,
@@ -41,6 +48,8 @@ func Register(ctx context.Context, management *config.Management) error {
 		vmCache:        vms.Cache(),
 		vmnetcfgClient: vmnetcfgs,
 		vmnetcfgCache:  vmnetcfgs.Cache(),
+		ippoolCache:    ippools.Cache(),
+		nadCache:       nads.Cache(),
 	}
 
 	vms.OnChange(ctx, controllerName, handler.OnChange)
@@ -103,6 +112,27 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 		}
 	}
 
+	// Filter out networks that don't have IPPools.
+	// We do this filtering here (rather than in the vmnetcfg controller) to prevent
+	// creating VirtualMachineNetworkConfig resources that would fail allocation.
+	// This is particularly important for VMs with mixed network types (some with
+	// DHCP/IPPools, some with static IPs or other configurations).
+	originalCount := len(ncm)
+	for i, nc := range ncm {
+		if !h.hasIPPool(vm, nc.NetworkName) {
+			logrus.Debugf("(vm.OnChange) network %s has no IPPool, skipping DHCP management for vm %s", nc.NetworkName, key)
+			delete(ncm, i)
+		}
+	}
+
+	// Log summary of filtering results
+	filteredCount := originalCount - len(ncm)
+	if filteredCount > 0 {
+		logrus.Infof("(vm.OnChange) vm %s: %d/%d networks have IPPools, %d filtered (no IPPool)", key, len(ncm), originalCount, filteredCount)
+	} else if len(ncm) > 0 {
+		logrus.Debugf("(vm.OnChange) vm %s: all %d networks have IPPools", key, len(ncm))
+	}
+
 	// If no network config is found, return early
 	if len(ncm) == 0 {
 		logrus.Infof("(vm.OnChange) no effective network configs found for vm %s, skipping", key)
@@ -158,6 +188,47 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 	}
 
 	return vm, nil
+}
+
+// hasIPPool checks if a network has an associated IPPool by looking up its NetworkAttachmentDefinition
+// and checking for IPPool labels. Returns true if an IPPool exists, false otherwise.
+// If networkName doesn't include a namespace, uses the VM's namespace (Kubernetes/Multus convention).
+func (h *Handler) hasIPPool(vm *kubevirtv1.VirtualMachine, networkName string) bool {
+	nadNamespace, nadName := kv.RSplit(networkName, "/")
+	if nadNamespace == "" {
+		nadNamespace = vm.Namespace
+	}
+
+	nad, err := h.nadCache.Get(nadNamespace, nadName)
+	if err != nil {
+		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s not found: %v", nadNamespace, nadName, err)
+		return false
+	}
+
+	if nad.Labels == nil {
+		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s has no labels", nadNamespace, nadName)
+		return false
+	}
+
+	ipPoolNamespace, ok := nad.Labels[util.IPPoolNamespaceLabelKey]
+	if !ok {
+		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s has no label %s", nadNamespace, nadName, util.IPPoolNamespaceLabelKey)
+		return false
+	}
+
+	ipPoolName, ok := nad.Labels[util.IPPoolNameLabelKey]
+	if !ok {
+		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s has no label %s", nadNamespace, nadName, util.IPPoolNameLabelKey)
+		return false
+	}
+
+	_, err = h.ippoolCache.Get(ipPoolNamespace, ipPoolName)
+	if err != nil {
+		logrus.Debugf("(vm.hasIPPool) ippool %s/%s not found: %v", ipPoolNamespace, ipPoolName, err)
+		return false
+	}
+
+	return true
 }
 
 // applyMACAddressAnnotation applies MAC addresses from the annotation to VM interfaces that don't have MAC addresses set.
