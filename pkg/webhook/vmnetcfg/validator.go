@@ -7,21 +7,24 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	networkv1 "github.com/harvester/vm-dhcp-controller/pkg/apis/network.harvesterhci.io/v1alpha1"
+	ctlcniv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/k8s.cni.cncf.io/v1"
 	ctlnetworkv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/network.harvesterhci.io/v1alpha1"
+	"github.com/harvester/vm-dhcp-controller/pkg/util"
 	"github.com/harvester/vm-dhcp-controller/pkg/webhook"
 	"github.com/harvester/webhook/pkg/server/admission"
-	"github.com/rancher/wrangler/v3/pkg/kv"
 	"github.com/sirupsen/logrus"
 )
 
 type Validator struct {
 	admission.DefaultValidator
 
+	nadCache    ctlcniv1.NetworkAttachmentDefinitionCache
 	ippoolCache ctlnetworkv1.IPPoolCache
 }
 
-func NewValidator(ippoolCache ctlnetworkv1.IPPoolCache) *Validator {
+func NewValidator(nadCache ctlcniv1.NetworkAttachmentDefinitionCache, ippoolCache ctlnetworkv1.IPPoolCache) *Validator {
 	return &Validator{
+		nadCache:    nadCache,
 		ippoolCache: ippoolCache,
 	}
 }
@@ -31,14 +34,9 @@ func (v *Validator) Create(request *admission.Request, newObj runtime.Object) er
 	logrus.Infof("create vmnetcfg %s/%s", vmNetCfg.Namespace, vmNetCfg.Name)
 
 	for _, nc := range vmNetCfg.Spec.NetworkConfigs {
-		ipPoolNamespace, ipPoolName := kv.RSplit(nc.NetworkName, "/")
-		if ipPoolNamespace == "" {
-			// Use the VirtualMachineNetworkConfig's namespace for unqualified network names
-			// This follows Kubernetes/Multus convention where resources in the same namespace
-			// can be referenced without the namespace prefix
-			ipPoolNamespace = vmNetCfg.Namespace
-		}
-		if _, err := v.ippoolCache.Get(ipPoolNamespace, ipPoolName); err != nil {
+		// Use shared utility to look up IPPool via NAD labels
+		// Uses vmNetCfg.Namespace as fallback for unqualified network names
+		if _, err := util.GetIPPoolFromNetworkName(v.nadCache, v.ippoolCache, nc.NetworkName, vmNetCfg.Namespace); err != nil {
 			return fmt.Errorf(webhook.CreateErr, vmNetCfg.Kind, vmNetCfg.Namespace, vmNetCfg.Name, err)
 		}
 	}

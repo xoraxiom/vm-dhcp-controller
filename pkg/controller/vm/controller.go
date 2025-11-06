@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"reflect"
 
-	"github.com/rancher/wrangler/v3/pkg/kv"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -194,40 +193,11 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 // and checking for IPPool labels. Returns true if an IPPool exists, false otherwise.
 // If networkName doesn't include a namespace, uses the VM's namespace (Kubernetes/Multus convention).
 func (h *Handler) hasIPPool(vm *kubevirtv1.VirtualMachine, networkName string) bool {
-	nadNamespace, nadName := kv.RSplit(networkName, "/")
-	if nadNamespace == "" {
-		nadNamespace = vm.Namespace
-	}
-
-	nad, err := h.nadCache.Get(nadNamespace, nadName)
+	_, err := util.GetIPPoolFromNetworkName(h.nadCache, h.ippoolCache, networkName, vm.Namespace)
 	if err != nil {
-		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s not found: %v", nadNamespace, nadName, err)
+		logrus.Debugf("(vm.hasIPPool) %v", err)
 		return false
 	}
-
-	if nad.Labels == nil {
-		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s has no labels", nadNamespace, nadName)
-		return false
-	}
-
-	ipPoolNamespace, ok := nad.Labels[util.IPPoolNamespaceLabelKey]
-	if !ok {
-		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s has no label %s", nadNamespace, nadName, util.IPPoolNamespaceLabelKey)
-		return false
-	}
-
-	ipPoolName, ok := nad.Labels[util.IPPoolNameLabelKey]
-	if !ok {
-		logrus.Debugf("(vm.hasIPPool) network attachment definition %s/%s has no label %s", nadNamespace, nadName, util.IPPoolNameLabelKey)
-		return false
-	}
-
-	_, err = h.ippoolCache.Get(ipPoolNamespace, ipPoolName)
-	if err != nil {
-		logrus.Debugf("(vm.hasIPPool) ippool %s/%s not found: %v", ipPoolNamespace, ipPoolName, err)
-		return false
-	}
-
 	return true
 }
 

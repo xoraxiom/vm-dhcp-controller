@@ -6,9 +6,12 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/rancher/wrangler/v3/pkg/kv"
 	corev1 "k8s.io/api/core/v1"
 
 	networkv1 "github.com/harvester/vm-dhcp-controller/pkg/apis/network.harvesterhci.io/v1alpha1"
+	ctlcniv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/k8s.cni.cncf.io/v1"
+	ctlnetworkv1 "github.com/harvester/vm-dhcp-controller/pkg/generated/controllers/network.harvesterhci.io/v1alpha1"
 )
 
 type PoolInfo struct {
@@ -163,4 +166,53 @@ func IsIPInBetweenOf(ip, ip1, ip2 string) bool {
 	}
 
 	return ipAddr.Compare(ip1Addr) >= 0 && ipAddr.Compare(ip2Addr) <= 0
+}
+
+// GetIPPoolFromNetworkName resolves an IPPool from a network name by:
+// 1. Looking up the NetworkAttachmentDefinition
+// 2. Reading IPPool namespace/name from NAD labels
+// 3. Retrieving the IPPool resource
+//
+// If networkName doesn't include a namespace prefix (e.g., "my-network" vs "default/my-network"),
+// it defaults to the provided fallbackNamespace. Pass an empty string to fallbackNamespace
+// to use no default (namespace will be empty if not specified in networkName).
+//
+// This function provides a single source of truth for IPPool lookup logic, preventing
+// duplication across controllers and webhooks.
+func GetIPPoolFromNetworkName(
+	nadCache ctlcniv1.NetworkAttachmentDefinitionCache,
+	ippoolCache ctlnetworkv1.IPPoolCache,
+	networkName string,
+	fallbackNamespace string,
+) (*networkv1.IPPool, error) {
+	nadNamespace, nadName := kv.RSplit(networkName, "/")
+	if nadNamespace == "" {
+		nadNamespace = fallbackNamespace
+	}
+
+	nad, err := nadCache.Get(nadNamespace, nadName)
+	if err != nil {
+		return nil, fmt.Errorf("network attachment definition %s/%s not found: %w", nadNamespace, nadName, err)
+	}
+
+	if nad.Labels == nil {
+		return nil, fmt.Errorf("network attachment definition %s/%s has no labels", nadNamespace, nadName)
+	}
+
+	ipPoolNamespace, ok := nad.Labels[IPPoolNamespaceLabelKey]
+	if !ok {
+		return nil, fmt.Errorf("network attachment definition %s/%s has no label %s", nadNamespace, nadName, IPPoolNamespaceLabelKey)
+	}
+
+	ipPoolName, ok := nad.Labels[IPPoolNameLabelKey]
+	if !ok {
+		return nil, fmt.Errorf("network attachment definition %s/%s has no label %s", nadNamespace, nadName, IPPoolNameLabelKey)
+	}
+
+	ipPool, err := ippoolCache.Get(ipPoolNamespace, ipPoolName)
+	if err != nil {
+		return nil, fmt.Errorf("ippool %s/%s not found: %w", ipPoolNamespace, ipPoolName, err)
+	}
+
+	return ipPool, nil
 }

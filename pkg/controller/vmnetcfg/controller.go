@@ -6,7 +6,6 @@ import (
 	"net"
 	"reflect"
 
-	"github.com/rancher/wrangler/v3/pkg/kv"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
@@ -349,23 +348,9 @@ func findIPAddressFromNetworkConfigStatusByMACAddress(ncStatuses []networkv1.Net
 }
 
 func (h *Handler) getIPPoolFromNetworkName(networkName string) (*networkv1.IPPool, error) {
-	nadNamespace, nadName := kv.RSplit(networkName, "/")
-	nad, err := h.nadCache.Get(nadNamespace, nadName)
-	if err != nil {
-		return nil, err
-	}
-	if nad.Labels == nil {
-		return nil, fmt.Errorf("network attachment definition %s/%s has no labels", nadNamespace, nadName)
-	}
-	ipPoolNamespace, ok := nad.Labels[util.IPPoolNamespaceLabelKey]
-	if !ok {
-		return nil, fmt.Errorf("network attachment definition %s/%s has no label %s", nadNamespace, nadName, util.IPPoolNamespaceLabelKey)
-	}
-	ipPoolName, ok := nad.Labels[util.IPPoolNameLabelKey]
-	if !ok {
-		return nil, fmt.Errorf("network attachment definition %s/%s has no label %s", nadNamespace, nadName, util.IPPoolNameLabelKey)
-	}
-	return h.ippoolCache.Get(ipPoolNamespace, ipPoolName)
+	// Use empty string as fallback namespace to preserve existing behavior
+	// where unqualified network names pass empty namespace to cache Get()
+	return util.GetIPPoolFromNetworkName(h.nadCache, h.ippoolCache, networkName, "")
 }
 
 func (h *Handler) getIPPoolFromNetworkConfig(nc networkv1.NetworkConfig) (*networkv1.IPPool, error) {
