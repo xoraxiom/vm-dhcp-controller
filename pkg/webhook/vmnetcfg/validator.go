@@ -33,7 +33,10 @@ func (v *Validator) Create(request *admission.Request, newObj runtime.Object) er
 	for _, nc := range vmNetCfg.Spec.NetworkConfigs {
 		ipPoolNamespace, ipPoolName := kv.RSplit(nc.NetworkName, "/")
 		if ipPoolNamespace == "" {
-			ipPoolNamespace = "default"
+			// Use the VirtualMachineNetworkConfig's namespace for unqualified network names
+			// This follows Kubernetes/Multus convention where resources in the same namespace
+			// can be referenced without the namespace prefix
+			ipPoolNamespace = vmNetCfg.Namespace
 		}
 		if _, err := v.ippoolCache.Get(ipPoolNamespace, ipPoolName); err != nil {
 			return fmt.Errorf(webhook.CreateErr, vmNetCfg.Kind, vmNetCfg.Namespace, vmNetCfg.Name, err)
