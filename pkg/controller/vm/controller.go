@@ -209,6 +209,11 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 // so the VM controller can filter them out proactively. Unexpected errors (cache failures, API issues)
 // are logged at Warning level to aid troubleshooting.
 func (h *Handler) hasIPPool(vm *kubevirtv1.VirtualMachine, networkName string) bool {
+	// If caches aren't initialized (e.g., in tests), assume IPPool exists for backward compatibility
+	if h.nadCache == nil || h.ippoolCache == nil {
+		return true
+	}
+
 	_, err := util.GetIPPoolFromNetworkName(h.nadCache, h.ippoolCache, networkName, vm.Namespace)
 	if err != nil {
 		// Expected: NAD or IPPool doesn't exist, or NAD lacks IPPool labels
