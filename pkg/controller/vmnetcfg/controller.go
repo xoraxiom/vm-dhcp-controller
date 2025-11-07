@@ -110,6 +110,15 @@ func (h *Handler) OnChange(key string, vmNetCfg *networkv1.VirtualMachineNetwork
 
 // Allocate allocates IP addresses for the VirtualMachineNetworkConfig only
 // when it is in-synced.
+//
+// Error handling philosophy: This function returns errors for all invalid states (missing IPPools,
+// not ready, out-of-sync, etc.) to maintain data integrity. By the time a VirtualMachineNetworkConfig
+// reaches this controller, it should only contain networks with valid IPPools (the VM controller
+// filters proactively, and the webhook validator enforces this on creation). If we encounter an
+// error here, it indicates either:
+// - A configuration issue that needs operator attention
+// - A transient state that will be resolved on the next reconciliation
+// Returning errors ensures the resource status reflects the true state and triggers retries.
 func (h *Handler) Allocate(vmNetCfg *networkv1.VirtualMachineNetworkConfig, status networkv1.VirtualMachineNetworkConfigStatus) (networkv1.VirtualMachineNetworkConfigStatus, error) {
 	logrus.Debugf("(vmnetcfg.Allocate) allocate ip for vmnetcfg %s/%s", vmNetCfg.Namespace, vmNetCfg.Name)
 

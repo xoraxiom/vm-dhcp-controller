@@ -179,6 +179,13 @@ func IsIPInBetweenOf(ip, ip1, ip2 string) bool {
 //
 // This function provides a single source of truth for IPPool lookup logic, preventing
 // duplication across controllers and webhooks.
+//
+// Concurrency note: This function performs multiple cache lookups (NAD, then IPPool) without
+// atomicity. In rare cases, a resource could be deleted between lookups. This is acceptable
+// because:
+// - Caches are eventually consistent with the Kubernetes API server
+// - Controllers will re-reconcile on the next event (watch/resync)
+// - The Kubernetes controller pattern expects and handles transient inconsistencies
 func GetIPPoolFromNetworkName(
 	nadCache ctlcniv1.NetworkAttachmentDefinitionCache,
 	ippoolCache ctlnetworkv1.IPPoolCache,

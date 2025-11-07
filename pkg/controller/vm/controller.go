@@ -82,6 +82,11 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 	ncm := make(map[string]networkv1.NetworkConfig, 1)
 
 	// Construct initial network config map
+	if len(vm.Spec.Template.Spec.Domain.Devices.Interfaces) == 0 {
+		logrus.Debugf("(vm.OnChange) vm %s has no network interfaces, skipping", key)
+		return vm, nil
+	}
+
 	for _, nic := range vm.Spec.Template.Spec.Domain.Devices.Interfaces {
 		if nic.MacAddress == "" {
 			continue
@@ -116,6 +121,13 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 	// creating VirtualMachineNetworkConfig resources that would fail allocation.
 	// This is particularly important for VMs with mixed network types (some with
 	// DHCP/IPPools, some with static IPs or other configurations).
+	//
+	// Error handling philosophy: This controller proactively filters networks and silently
+	// skips those without IPPools (see hasIPPool). In contrast, the vmnetcfg controller
+	// and webhook validator return errors for invalid configurations (they validate).
+	// This difference is intentional:
+	// - VM controller: "try to help where possible, skip what we can't handle"
+	// - vmnetcfg/webhook: "enforce data integrity, reject invalid input"
 	originalCount := len(ncm)
 	for i, nc := range ncm {
 		if !h.hasIPPool(vm, nc.NetworkName) {
@@ -192,10 +204,24 @@ func (h *Handler) OnChange(key string, vm *kubevirtv1.VirtualMachine) (*kubevirt
 // hasIPPool checks if a network has an associated IPPool by looking up its NetworkAttachmentDefinition
 // and checking for IPPool labels. Returns true if an IPPool exists, false otherwise.
 // If networkName doesn't include a namespace, uses the VM's namespace (Kubernetes/Multus convention).
+//
+// This function is intentionally permissive: it returns false for expected cases (network without IPPool)
+// so the VM controller can filter them out proactively. Unexpected errors (cache failures, API issues)
+// are logged at Warning level to aid troubleshooting.
 func (h *Handler) hasIPPool(vm *kubevirtv1.VirtualMachine, networkName string) bool {
 	_, err := util.GetIPPoolFromNetworkName(h.nadCache, h.ippoolCache, networkName, vm.Namespace)
 	if err != nil {
-		logrus.Debugf("(vm.hasIPPool) %v", err)
+		// Expected: NAD or IPPool doesn't exist, or NAD lacks IPPool labels
+		// This is normal for networks with static IPs, BGP peering, etc.
+		if apierrors.IsNotFound(err) {
+			logrus.Debugf("(vm.hasIPPool) %v", err)
+			return false
+		}
+
+		// Unexpected: cache failures, API server issues, etc.
+		// Log at Warning level so infrastructure problems are visible
+		logrus.Warnf("(vm.hasIPPool) unexpected error checking IPPool for network %s on vm %s/%s: %v",
+			networkName, vm.Namespace, vm.Name, err)
 		return false
 	}
 	return true
